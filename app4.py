@@ -10,7 +10,7 @@ import datetime
 import requests
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="F&G Pro Suite", layout="wide", page_icon="🐺")
+st.set_page_config(page_title="Kerberos Pro Suite", layout="wide", page_icon="🐺")
 
 # --- CSS & STYLING ---
 st.markdown("""
@@ -130,7 +130,7 @@ def fetch_macro_data():
 # --- LOGIC MODULES ---
 
 def calculate_no_demand(df):
-    """'No Demand' Logic"""
+    """Kerberos 'No Demand' Logic"""
     df = df.copy()
     df['Vol_SMA20'] = df['Volume'].rolling(window=20).mean()
     df['Price_Up'] = df['Close'] > df['Open']
@@ -238,22 +238,31 @@ def plot_sector_rotation(market_data):
             sec_close = market_data[sec]['Close']
             # Align
             common = sec_close.index.intersection(spy.index)
+            
+            # --- FIX: Check if intersection is empty before calculation ---
+            if common.empty:
+                continue
+                
             rel_perf = (sec_close.loc[common] / sec_close.loc[common].iloc[0]) / \
                        (spy.loc[common] / spy.loc[common].iloc[0])
             performance[sec] = (rel_perf.iloc[-1] - 1) * 100
             
     df_perf = pd.DataFrame(list(performance.items()), columns=['Sector', 'Rel_Perf'])
-    df_perf = df_perf.sort_values('Rel_Perf', ascending=False)
-    
-    fig = px.bar(df_perf, x='Rel_Perf', y='Sector', orientation='h', 
-                 color='Rel_Perf', color_continuous_scale='RdYlGn',
-                 title="Sector Relative Strength vs SPY (Lookback Period)")
-    fig.update_layout(template="plotly_dark", height=400)
+    if not df_perf.empty:
+        df_perf = df_perf.sort_values('Rel_Perf', ascending=False)
+        fig = px.bar(df_perf, x='Rel_Perf', y='Sector', orientation='h', 
+                    color='Rel_Perf', color_continuous_scale='RdYlGn',
+                    title="Sector Relative Strength vs SPY (Lookback Period)")
+        fig.update_layout(template="plotly_dark", height=400)
+    else:
+        fig = go.Figure()
+        fig.update_layout(title="No Overlapping Sector Data Found", template="plotly_dark")
+        
     return fig
 
 # --- MAIN APP LAYOUT ---
 
-st.sidebar.title("Pro")
+st.sidebar.title("🐺 Kerberos Pro")
 st.sidebar.markdown("---")
 lookback = st.sidebar.select_slider("Lookback", ["6mo", "1y", "2y", "5y"], value="1y")
 
@@ -267,7 +276,7 @@ with st.sidebar.expander("🔔 Alert Configuration"):
     if st.button("Test Alert"):
         if webhook_url:
             try:
-                payload = {"content": "🐺 **Pro**: This is a test alert from your dashboard."}
+                payload = {"content": "🐺 **Kerberos Pro**: This is a test alert from your dashboard."}
                 requests.post(webhook_url, json=payload)
                 st.success("Sent!")
             except:
