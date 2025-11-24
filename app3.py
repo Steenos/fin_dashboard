@@ -8,7 +8,7 @@ import pandas_datareader.data as web
 import datetime
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Kerberos007 Trading Suite V3", layout="wide", page_icon="🐺")
+st.set_page_config(page_title="Trading Suite V3", layout="wide", page_icon="🐺")
 
 # --- CSS & STYLING ---
 st.markdown("""
