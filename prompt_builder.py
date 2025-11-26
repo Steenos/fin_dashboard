@@ -8,7 +8,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- Session State Management for "Load Example" functionality ---
+# --- Session State Management ---
 if 'form_data' not in st.session_state:
     st.session_state.form_data = {}
 
@@ -21,6 +21,10 @@ def load_example():
         "subj_expr": "Neutral/soft gaze, slightly pouting lips.",
         "subj_age": "Young adult (appearance)",
         
+        # Face Preservation (Default Off)
+        "face_preserve": False,
+        "face_preserve_desc": "The girl’s facial features, expression, and identity must remain exactly the same as the reference image.",
+
         # Clothing
         "cloth_top": "Black spaghetti strap crop top/camisole.",
         "cloth_bottom": "Light grey sweatpants or lounge pants, visible waistband.",
@@ -98,7 +102,24 @@ with tab1:
     s_pose = st.text_area("Pose", value=get_val("subj_pose"), placeholder="Detailed description of pose...", height=100)
 
     st.markdown("---")
-    st.subheader("Face & Hair")
+    
+    # --- FACE PRESERVATION LOGIC ---
+    col_face_header, col_face_toggle = st.columns([3, 1])
+    with col_face_header:
+        st.subheader("Face & Hair")
+    with col_face_toggle:
+        # Toggle for Face Preservation
+        preserve_face = st.toggle("📸 Preserve Reference Face", value=get_val("face_preserve", False))
+
+    if preserve_face:
+        st.info("ℹ️ **Reference Mode Active:** The JSON will include instructions to lock facial features to a reference image.")
+        preserve_desc = st.text_area(
+            "Reference Preservation Instruction", 
+            value=get_val("face_preserve_desc", "The girl’s facial features, expression, and identity must remain exactly the same as the reference image.")
+        )
+    else:
+        preserve_desc = ""
+
     col3, col4 = st.columns(2)
     with col3:
         h_color = st.text_input("Hair Color", value=get_val("hair_color"))
@@ -152,17 +173,32 @@ with tab4:
         st_aes = st.text_input("Aesthetic", value=get_val("sty_aes"), placeholder="e.g. Lifestyle, Cyberpunk")
         st_mood = st.text_input("Mood", value=get_val("sty_mood"), placeholder="e.g. Casual, Dark")
 
-# --- Update Session State with current values (to persist across tabs) ---
-# Note: Streamlit widgets auto-update their own keys if keys are assigned, 
-# but here we simply reconstruct the JSON from the widget return values.
+# --- CONSTRUCT JSON ---
 
-final_json = {
-  "subject": {
+# Base Subject Data
+subject_data = {
     "type": s_type,
     "pose": s_pose,
     "expression": s_expr,
     "age": s_age
-  },
+}
+
+# Base Face Data
+face_data = {
+    "features": f_feat,
+    "makeup": f_mkup
+}
+
+# If Preservation is toggled on, inject specific structure into Face Data
+if preserve_face:
+    face_data["preservation"] = {
+        "preserve_original": True,
+        "reference_match": True,
+        "description": preserve_desc
+    }
+
+final_json = {
+  "subject": subject_data,
   "clothing": {
     "top": c_top,
     "bottom": c_bot
@@ -172,10 +208,7 @@ final_json = {
     "style": h_style,
     "condition": h_cond
   },
-  "face": {
-    "features": f_feat,
-    "makeup": f_mkup
-  },
+  "face": face_data,
   "accessories": {
     "jewelry": a_jewel,
     "tech": a_tech,
@@ -216,9 +249,8 @@ with col_action:
     st.download_button(
         label="Download JSON",
         data=json_string,
-        file_name="prompt.json",
+        file_name="prompt_with_face_preservation.json",
         mime="application/json"
     )
     
-    # Text representation for clipboard (Streamlit doesn't support direct clipboard access easily in all browsers, so code block is best)
     st.text_area("Raw Text (Copy manually)", value=json_string, height=300)
