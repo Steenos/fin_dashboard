@@ -93,6 +93,64 @@ with st.sidebar:
 # -----------------------------------------------------------------------------
 # 3. Data Fetching & Processing
 # -----------------------------------------------------------------------------
+@st.cache_data(ttl=60) # Cache for 1 min (Perp stats need to be fresh)
+def fetch_hyperliquid_perp_stats(coin_symbol):
+    """
+    Fetches Open Interest, Funding Rates, and Volume from Hyperliquid 'metaAndAssetCtxs'.
+    """
+    url = "https://api.hyperliquid.xyz/info"
+    headers = {"Content-Type": "application/json"}
+    payload = {"type": "metaAndAssetCtxs"}
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Data structure is [universe_list, context_list]
+        universe = data[0]
+        ctxs = data[1]
+        
+        # Find index of our coin
+        coin_index = -1
+        for i, asset in enumerate(universe):
+            if asset['name'] == coin_symbol:
+                coin_index = i
+                break
+        
+        if coin_index == -1:
+            return None
+            
+        ctx = ctxs[coin_index]
+        
+        # Parse relevant perp stats
+        # Funding is hourly rate. We extrapolate to APR.
+        hourly_funding = float(ctx.get('funding', 0))
+        funding_apr = hourly_funding * 24 * 365 * 100
+        
+        # Open Interest is in units of the coin. Convert to USD.
+        mark_px = float(ctx.get('markPx', 0))
+        oi_units = float(ctx.get('openInterest', 0))
+        oi_usd = oi_units * mark_px
+        
+        # Day Volume
+        day_vol = float(ctx.get('dayNtlVlm', 0))
+        
+        # Premium (Mark vs Oracle)
+        oracle_px = float(ctx.get('oraclePx', mark_px))
+        premium = ((mark_px - oracle_px) / oracle_px) * 100
+        
+        return {
+            "mark_px": mark_px,
+            "funding_apr": funding_apr,
+            "oi_usd": oi_usd,
+            "day_vol": day_vol,
+            "premium": premium
+        }
+        
+    except Exception as e:
+        return None
+
 @st.cache_data(ttl=300) # Cache for 5 mins
 def fetch_hyperliquid_data(coin_symbol, interval, start_time_dt):
     """
@@ -210,6 +268,7 @@ def fetch_crypto_data(symbol, bench_symbol, interval, period_days):
 # Fetch Data
 with st.spinner('Accessing Hyperliquid Chain Data...'):
     df = fetch_crypto_data(ticker, benchmark_ticker, hl_interval, lookback_period)
+    perp_stats = fetch_hyperliquid_perp_stats(ticker)
 
 if df.empty:
     st.error("Data unavailable. Check if asset exists on Hyperliquid.")
@@ -255,6 +314,23 @@ else:
     crowd_state = "NEUTRAL"
     crowd_desc = "No extreme sentiment reading."
 
+# Prep Perp Stats Display
+if perp_stats:
+    funding = perp_stats['funding_apr']
+    funding_col = "neon-green" if funding < 5 else ("neon-orange" if funding < 20 else "neon-red")
+    
+    oi_formatted = f"${perp_stats['oi_usd']/1000000:.1f}M"
+    vol_formatted = f"${perp_stats['day_vol']/1000000:.1f}M"
+    
+    perp_summary = f"""
+    **Perpetuals Intelligence:**
+    * **Funding APR:** <span class="{funding_col}">{funding:.2f}%</span> (Leverage Demand)
+    * **Open Interest:** {oi_formatted}
+    * **24h Volume:** {vol_formatted}
+    """
+else:
+    perp_summary = "**Perpetuals Intelligence:** Data Unavailable"
+
 # Display Verdict
 col1, col2 = st.columns([2, 1])
 with col1:
@@ -271,9 +347,7 @@ with col2:
     **Current Price:**
     # ${last_price:,.2f}
     
-    **Alignment:**
-    Correlation with {benchmark_label}: **{last_corr:.2f}**
-    *{"Decoupled (Idiosyncratic)" if abs(last_corr) < 0.5 else "Highly Correlated (Macro Driven)"}*
+    {perp_summary}
     """)
 
 st.divider()
@@ -281,7 +355,7 @@ st.divider()
 # -----------------------------------------------------------------------------
 # 5. KPI Metrics Row
 # -----------------------------------------------------------------------------
-kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5) # Added 5th column for Funding
 
 def metric_card(title, value, status, color_cls="white"):
     st.markdown(f"""
@@ -301,10 +375,21 @@ with kpi2:
     metric_card("CROWD (RSI)", f"{last_rsi:.0f}", crowd_state, color)
 
 with kpi3:
+    if perp_stats:
+        fund_val = perp_stats['funding_apr']
+        # High positive funding (>20%) is crowded longs (Bearish risk)
+        # Negative funding is crowded shorts (Bullish squeeze potential)
+        fund_status = "Crowded Longs" if fund_val > 20 else ("Crowded Shorts" if fund_val < 0 else "Neutral")
+        fund_color = "neon-red" if fund_val > 20 else ("neon-green" if fund_val < 0 else "white")
+        metric_card("FUNDING (APR)", f"{fund_val:.2f}%", fund_status, fund_color)
+    else:
+        metric_card("FUNDING", "N/A", "No Data")
+
+with kpi4:
     metric_card("REALIZED VOL", f"{last_vol:.1f}%", vol_state, 
                 "neon-red" if last_vol > 80 else "white")
 
-with kpi4:
+with kpi5:
     metric_card("ALIGNMENT", f"{last_corr:.2f}", f"vs {benchmark_label}", "white")
 
 st.markdown("---")
@@ -369,6 +454,7 @@ st.plotly_chart(fig, use_container_width=True)
 
 st.markdown("""
 <div style="text-align: center; color: #666; font-size: 12px;">
-    <i>'Cycle Trend' calculated via 50D/200D MA Divergence. Volatility is annualized based on 365 trading days.</i>
+    <i>'Cycle Trend' calculated via 50D/200D MA Divergence. Volatility is annualized based on 365 trading days.</i><br>
+    <i>Perpetuals stats (Funding, OI) fetched live from Hyperliquid global state.</i>
 </div>
 """, unsafe_allow_html=True)
