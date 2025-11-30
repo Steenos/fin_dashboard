@@ -103,7 +103,8 @@ def fetch_hyperliquid_perp_stats(coin_symbol):
     payload = {"type": "metaAndAssetCtxs"}
     
     try:
-        response = requests.post(url, headers=headers, json=payload)
+        # Added timeout to prevent hanging
+        response = requests.post(url, headers=headers, json=payload, timeout=5)
         response.raise_for_status()
         data = response.json()
         
@@ -149,6 +150,8 @@ def fetch_hyperliquid_perp_stats(coin_symbol):
         }
         
     except Exception as e:
+        # Debugging: Uncomment the line below to see the specific error in the app
+        # st.sidebar.error(f"Perp Data Error: {e}")
         return None
 
 @st.cache_data(ttl=300) # Cache for 5 mins
@@ -174,7 +177,7 @@ def fetch_hyperliquid_data(coin_symbol, interval, start_time_dt):
     }
     
     try:
-        response = requests.post(url, headers=headers, json=payload)
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
         response.raise_for_status()
         data = response.json()
         
