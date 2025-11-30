@@ -4,6 +4,7 @@ from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
 import yfinance as yf
+import requests
 from datetime import datetime, timedelta
 
 # -----------------------------------------------------------------------------
@@ -49,21 +50,23 @@ with st.sidebar:
     st.title("⚡ Crypto Command")
     st.markdown("---")
     
-    # Asset Selection
+    # Asset Selection - Hyperliquid Symbols
     asset_map = {
-        "Bitcoin (BTC)": "BTC-USD",
-        "Ethereum (ETH)": "ETH-USD",
-        "Solana (SOL)": "SOL-USD",
-        "Ripple (XRP)": "XRP-USD",
-        "Dogecoin (DOGE)": "DOGE-USD",
-        "Cardano (ADA)": "ADA-USD",
-        "Binance Coin (BNB)": "BNB-USD"
+        "Bitcoin (BTC)": "BTC",
+        "Ethereum (ETH)": "ETH",
+        "Hyperliquid (HYPE)": "HYPE",
+        "Solana (SOL)": "SOL",
+        "Ripple (XRP)": "XRP",
+        "Dogecoin (DOGE)": "DOGE",
+        "Cardano (ADA)": "ADA",
+        "Binance Coin (BNB)": "BNB",
+        "Avalanche (AVAX)": "AVAX"
     }
     
     selected_asset_label = st.selectbox("Select Asset", list(asset_map.keys()), index=0)
     ticker = asset_map[selected_asset_label]
     
-    # Benchmark for Correlation
+    # Benchmark for Correlation (Still uses Yahoo Finance)
     benchmark_map = {
         "Nasdaq 100 (Tech)": "QQQ",
         "S&P 500 (TradFi)": "^GSPC",
@@ -74,57 +77,116 @@ with st.sidebar:
     benchmark_ticker = benchmark_map[benchmark_label]
     
     # Timeframe
-    interval_map = {"Daily": "1d", "Weekly": "1wk"}
-    timeframe_label = st.selectbox("Timeframe", list(interval_map.keys()), index=0)
-    yf_interval = interval_map[timeframe_label]
+    # Hyperliquid uses '1d', '1w'. Yahoo uses '1d', '1wk'
+    interval_options = ["Daily", "Weekly", "Hourly"]
+    timeframe_label = st.selectbox("Timeframe", interval_options, index=0)
+    
+    # Map for Hyperliquid
+    hl_interval_map = {"Daily": "1d", "Weekly": "1w", "Hourly": "1h"}
+    hl_interval = hl_interval_map[timeframe_label]
     
     st.markdown("### ⚙️ Engine Settings")
     lookback_period = st.slider("Analysis Horizon (Days)", 90, 730, 365)
     
-    st.info(f"Tracking: {ticker} vs {benchmark_ticker}")
+    st.info(f"Tracking: {ticker} (Hyperliquid) vs {benchmark_ticker} (Yahoo)")
 
 # -----------------------------------------------------------------------------
 # 3. Data Fetching & Processing
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=300) # Cache for 5 mins
+def fetch_hyperliquid_data(coin_symbol, interval, start_time_dt):
+    """
+    Fetches candle data from Hyperliquid API.
+    """
+    url = "https://api.hyperliquid.xyz/info"
+    headers = {"Content-Type": "application/json"}
+    
+    # Convert start datetime to milliseconds timestamp
+    start_ts = int(start_time_dt.timestamp() * 1000)
+    end_ts = int(datetime.now().timestamp() * 1000)
+    
+    payload = {
+        "type": "candleSnapshot",
+        "req": {
+            "coin": coin_symbol,
+            "interval": interval,
+            "startTime": start_ts,
+            "endTime": end_ts
+        }
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        data = response.json()
+        
+        if not data:
+            return pd.DataFrame()
+            
+        # Parse into DataFrame
+        df = pd.DataFrame(data)
+        # Hyperliquid returns: t (time), o (open), h (high), l (low), c (close), v (volume)
+        # Rename columns to match standard format
+        df = df.rename(columns={
+            "t": "Date", 
+            "o": "Open", 
+            "h": "High", 
+            "l": "Low", 
+            "c": "Close", 
+            "v": "Volume"
+        })
+        
+        # Convert types
+        df["Date"] = pd.to_datetime(df["Date"], unit="ms")
+        df[["Open", "High", "Low", "Close", "Volume"]] = df[["Open", "High", "Low", "Close", "Volume"]].astype(float)
+        
+        df = df.set_index("Date")
+        return df
+        
+    except Exception as e:
+        st.error(f"Hyperliquid API Error: {e}")
+        return pd.DataFrame()
+
+@st.cache_data(ttl=300)
 def fetch_crypto_data(symbol, bench_symbol, interval, period_days):
     """
-    Fetches Crypto and Benchmark data, calculating 'Hero' metrics.
+    Fetches Crypto (Hyperliquid) and Benchmark (Yahoo) data, calculating 'Hero' metrics.
     """
     start_date = datetime.now() - timedelta(days=period_days + 200) # Buffer for MA
     
-    # 1. Fetch Crypto Data
-    try:
-        df = yf.download(symbol, start=start_date, interval=interval, progress=False)
-        if df.empty: return pd.DataFrame()
-        # Handle MultiIndex
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-    except:
-        return pd.DataFrame()
-        
-    df['Close'] = df['Close'].astype(float)
+    # 1. Fetch Crypto Data from Hyperliquid
+    df = fetch_hyperliquid_data(symbol, interval, start_date)
     
-    # 2. Fetch Benchmark Data
+    if df.empty:
+        return pd.DataFrame()
+    
+    # 2. Fetch Benchmark Data from Yahoo Finance
+    # Map HL interval to YF interval
+    yf_interval = interval
+    if interval == '1w': yf_interval = '1wk'
+    
     try:
-        bench = yf.download(bench_symbol, start=start_date, interval=interval, progress=False)
+        bench = yf.download(bench_symbol, start=start_date, interval=yf_interval, progress=False)
         if isinstance(bench.columns, pd.MultiIndex):
             bench.columns = bench.columns.get_level_values(0)
+            
+        # Align Benchmark to Crypto Data
+        # Ensure index is timezone naive for compatibility if needed, or handle matching
+        if bench.index.tz is not None:
+             bench.index = bench.index.tz_localize(None)
+             
         df['Bench_Close'] = bench['Close'].reindex(df.index).fillna(method='ffill')
-    except:
+    except Exception as e:
         df['Bench_Close'] = df['Close'] # Fallback
         
     # --- PROPRIETARY CALCULATIONS ---
     
     # A. The Macro Engine: Cycle Trend (50D vs 200D MA)
-    # In Crypto, the 50/200 cross is the "Golden Cross" or "Death Cross".
-    # We measure the SPREAD to see momentum strength.
     df['MA50'] = df['Close'].rolling(window=50).mean()
     df['MA200'] = df['Close'].rolling(window=200).mean()
     df['Trend_Engine'] = (df['MA50'] - df['MA200']) / df['MA200'] * 100
     
     # B. Positioning: RSI (The Crowd)
-    # Standard 14-period RSI
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -132,9 +194,8 @@ def fetch_crypto_data(symbol, bench_symbol, interval, period_days):
     df['Crowd_Sentiment'] = 100 - (100 / (1 + rs))
     
     # C. Volatility: Realized Vol (The Coil)
-    # 20-period annualized vol
     df['Returns'] = np.log(df['Close'] / df['Close'].shift(1))
-    df['Volatility'] = df['Returns'].rolling(window=20).std() * np.sqrt(365) * 100 # Crypto trades 365 days
+    df['Volatility'] = df['Returns'].rolling(window=20).std() * np.sqrt(365) * 100
     
     # D. Alignment: Rolling Correlation
     df['Correlation'] = df['Close'].rolling(window=30).corr(df['Bench_Close'])
@@ -147,18 +208,18 @@ def fetch_crypto_data(symbol, bench_symbol, interval, period_days):
     return df
 
 # Fetch Data
-with st.spinner('Accessing Blockchain Data...'):
-    df = fetch_crypto_data(ticker, benchmark_ticker, yf_interval, lookback_period)
+with st.spinner('Accessing Hyperliquid Chain Data...'):
+    df = fetch_crypto_data(ticker, benchmark_ticker, hl_interval, lookback_period)
 
 if df.empty:
-    st.error("Data unavailable. Please check the ticker or internet connection.")
+    st.error("Data unavailable. Check if asset exists on Hyperliquid.")
     st.stop()
 
 # -----------------------------------------------------------------------------
 # 4. Executive Summary (The Verdict)
 # -----------------------------------------------------------------------------
 st.title(f"{selected_asset_label} Institutional Dashboard")
-st.caption(f"Real-Time Data: Yahoo Finance | Benchmark: {benchmark_label}")
+st.caption(f"Real-Time Data: Hyperliquid API | Benchmark: {benchmark_label}")
 
 # Current State
 last_price = df['Close'].iloc[-1]
@@ -259,7 +320,7 @@ fig = make_subplots(
     vertical_spacing=0.03,
     row_heights=[0.3, 0.15, 0.15, 0.20, 0.20],
     subplot_titles=(
-        f"Price Action: {ticker}", 
+        f"Price Action: {ticker} (Hyperliquid)", 
         "Cycle Engine (Trend Spread)", 
         f"Alignment (Correlation vs {benchmark_label})", 
         "Crowd Sentiment (RSI)", 
